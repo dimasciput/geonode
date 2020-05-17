@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #########################################################################
 #
-# Copyright (C) 2016 OSGeo
+# Copyright (C) 2017 OSGeo
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -18,13 +18,29 @@
 #
 #########################################################################
 
-from django.test import TestCase
+from geonode.tests.base import GeoNodeBaseTestSupport
+
+from geonode.messaging import connection
+from geonode.messaging.consumer import Consumer
 
 
-class MessagingTest(TestCase):
+class MessagingTest(GeoNodeBaseTestSupport):
     """
     Tests geonode.messaging
     """
+
+    type = 'layer'
+
     def setUp(self):
+        super(MessagingTest, self).setUp()
+
         self.adm_un = "admin"
         self.adm_pw = "admin"
+
+    def test_consumer(self):
+        with connection:
+            try:
+                worker = Consumer(connection)
+                self.assertTrue(worker is not None)
+            except Exception:
+                self.fail("could not create a Consumer.")

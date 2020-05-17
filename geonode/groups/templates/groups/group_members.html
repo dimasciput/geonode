@@ -2,11 +2,20 @@
 {% load i18n %}
 {% load bootstrap_tags %}
 
+{% block head %}
+{{ block.super }}
+<style>
+.select2-container--default .select2-search--inline .select2-search__field {
+  width: 300px !important;
+}
+</style>
+{% endblock head %}
+
 {% block sidebar %}
 <div class="row">
   <div class="col-md-12">
     <h2 class="page-header">{%  trans "Edit Members for"  %} <a href="{% url "group_detail" group.slug %}">{{ group.title }}</a></h2>
-    <h2 class="page-title">{%  trans "Members" %}</h2>
+    <h3 class="page-title">{%  trans "Current Members" %}</h3>
     <div class="row">
       <div class="col-md-12">
         <ul class="nav nav-tabs">
@@ -32,6 +41,20 @@
                   {% csrf_token %}
                   <button type="submit" class="btn btn-danger btn-xs">{% trans 'Remove' %}</button>
                 </form>
+                {% if member.role == 'member' %}
+                  |
+                  <form style="display: inline;" method="POST" action="{% url "group_member_promote" group.slug member.user.username %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-success btn-xs">{% trans 'Promote' %}</button>
+                  </form>
+                {% endif %}
+                {% if member.role == 'manager' %}
+                  |
+                  <form style="display: inline;" method="POST" action="{% url "group_member_demote" group.slug member.user.username %}">
+                    {% csrf_token %}
+                    <button type="submit" class="btn btn-warning btn-xs">{% trans 'Demote' %}</button>
+                  </form>
+                {% endif %}
               <h4>
               <h5>
                   {% trans 'Role' %}: {{ member.role }}
@@ -43,7 +66,7 @@
           <article id="managers" class="tab-pane">
             <ul class="no-style-list">
             {% for member in members %}
-              {% if member.role = 'manager' %}
+              {% if member.role == 'manager' %}
               <h4>
                 <i class="fa fa-user"></i> <a href="{{ member.user.get_absolute_url }}">{{ member.user.username }}</a>
                 {% if member.user.email %}
@@ -57,6 +80,11 @@
                 <form style="display: inline;" method="POST" action="{% url "group_member_remove" group.slug member.user.username %}">
                   {% csrf_token %}
                   <button type="submit" class="btn btn-danger btn-xs">{% trans 'Remove' %}</button>
+                </form>
+                |
+                <form style="display: inline;" method="POST" action="{% url "group_member_demote" group.slug member.user.username %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-warning btn-xs">{% trans 'Demote' %}</button>
                 </form>
               <h4>
               <h5>
@@ -70,7 +98,7 @@
           <article id="members" class="tab-pane">
             <ul class="no-style-list">
             {% for member in members %}
-              {% if member.role = 'member' %}
+              {% if member.role == 'member' %}
               <h4>
                 <i class="fa fa-user"></i> <a href="{{ member.user.get_absolute_url }}">{{ member.user.username }}</a>
                 {% if member.user.email %}
@@ -85,6 +113,11 @@
                   {% csrf_token %}
                   <button type="submit" class="btn btn-danger btn-xs">{% trans 'Remove' %}</button>
                 </form>
+                |
+                <form style="display: inline;" method="POST" action="{% url "group_member_promote" group.slug member.user.username %}">
+                  {% csrf_token %}
+                  <button type="submit" class="btn btn-success btn-xs">{% trans 'Promote' %}</button>
+                </form>
               <h4>
               <h5>
                   {% trans 'Role' %}: {{ member.role }}
@@ -95,27 +128,20 @@
             </ul>
           </article>
         </div>
-        {% if member_form %}
-          <h2>{% trans "Add members" %}</h2>
-          <form class="uniForm" method="POST" action="{% url "group_members_add" group.slug %}">
-            {% csrf_token %}
-            <div id="member_form_container">
-              {{ member_form|as_bootstrap }}<br/><br/>
-            </div>
-            <input type="submit" value="Add Group Members" class="btn btn-success"/>
-          </form>
-        {% endif %}
-
-        {% if invite_form %}
-          <h2>{% trans "Invite people" %}</h2>
-          <form class="uniForm" method="POST" action="{% url "group_invite" group.slug %}">
-            {% csrf_token %}
-            {{ invite_form|as_bootstrap }}
-            <input type="submit" value="invite" />
-          </form>
-        {% endif %}
       </div>
     </div>
+    {% if member_form %}
+    <div class="row">
+        <h3>{% trans "Add new members" %}</h3>
+        <form method="POST" action="{% url "group_members_add" group.slug %}">
+            {% csrf_token %}
+            <div id="member_form_container">
+                {{ member_form|as_bootstrap }}<br/><br/>
+            </div>
+            <input type="submit" value="{% trans "Add Group Members" %}" class="btn btn-primary"/>
+        </form>
+    </div>
+    {% endif %}
   </div>
 </div>
 {% endblock %}

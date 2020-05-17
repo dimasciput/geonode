@@ -3,11 +3,10 @@
 'use strict';
 
 define(function (require, exports) {
-
         var _      = require('underscore'),
-        fileTypes  = require('upload/FileTypes'),
-        path       = require('upload/path'),
-        common     = require('upload/common'),
+        fileTypes  = require('./FileTypes'),
+        path       = require('./path'),
+        common     = require('./common'),
         LayerInfo;
 
     /** Creates an instance of a LayerInfo
@@ -17,15 +16,13 @@ define(function (require, exports) {
      *  @param {name, files}
      */
     LayerInfo = function (options) {
-
         this.id       = null;
         this.name     = null;
         this.files    = null;
-
         this.type     = null;
         this.main     = null;
-
         this.element  = null;
+
         $.extend(this, options || {});
         if (!this.main || !this.type) {
             this.guessFileType();
@@ -64,10 +61,11 @@ define(function (require, exports) {
      */
     LayerInfo.prototype.findFileType = function (file) {
         var i, type, res;
+        var extensions = this.getExtensions();
         $.each(fileTypes, function (name, type) {
-            if (type.isType(file)) {
+            if (type.isType(file, extensions)) {
                 res = {type: type, file: file};
-                return false;
+                // return false;
             }
         });
         return res;
@@ -82,11 +80,22 @@ define(function (require, exports) {
         var self = this;
         $.each(this.files, function (idx, file) {
             var results = self.findFileType(file);
-            // if we find the type of the file, we also find the "main"
-            // file
+
+            // if we find the type of the file, we also find the "main" file
             if (results) {
-                self.type = results.type;
-                self.main = results.file;
+                if (results.type.main == 'kml') {
+                   // Assume the kml file always as main one
+                   self.type = results.type;
+                   self.main = results.file;
+                } else if ((results.type.main == 'xml' || results.type.main == 'sld') &&
+                        self.main != undefined) {
+                   // Do not assume the metadata or sld file as main one
+                   self.type = self.type;
+                   self.main = self.main;
+               } else if ((self.type == undefined) || (self.type != undefined && self.type.main != 'kml')) {
+                   self.type = results.type;
+                   self.main = results.file;
+                }
             }
         });
     };
@@ -99,20 +108,18 @@ define(function (require, exports) {
      */
     LayerInfo.prototype.collectErrors = function () {
         var errors = [];
-
-		var mosaic_is_valid = true;
-		var is_granule = $('#' + this.name + '-mosaic').is(':checked');
+        var mosaic_is_valid = true;
+        var is_granule = $('#' + this.name + '-mosaic').is(':checked');
 
         var is_time_enabled = $('#' + this.name + '-timedim').is(':checked');
-		var is_time_valid = is_time_enabled && !$('#' + this.name + '-timedim-value-valid').is(':visible');
+	    var is_time_valid = is_time_enabled && !$('#' + this.name + '-timedim-value-valid').is(':visible');
 
         if (is_granule && is_time_enabled) {
-			mosaic_is_valid = is_time_valid;
-		}
-
-		if (is_granule && !mosaic_is_valid) {
-			errors.push('The configuration of the file as a Mosaic Granule is not valid, please fix the issue and try again');
-		}
+		    mosaic_is_valid = is_time_valid;
+	    }
+	    if (is_granule && !mosaic_is_valid) {
+		    errors.push('The configuration of the file as a Mosaic Granule is not valid, please fix the issue and try again');
+	    }
 
         if (this.type) {
             errors = this.type.findTypeErrors(this.getExtensions());
@@ -149,7 +156,7 @@ define(function (require, exports) {
      *  @returns {FromData}
      */
     LayerInfo.prototype.prepareFormData = function (form_data) {
-        var i, ext, file, perm, geogig, geogig_store, time, mosaic;
+        var i, ext, file, perm, time, mosaic;
 
         var base_ext  = this.main.name.split('.').pop();
         var base_name = this.name;
@@ -163,7 +170,7 @@ define(function (require, exports) {
         if (!form_data) {
             form_data = new FormData();
         }
-        // this should be generate from the permission widget
+        // this should be generated from the permission widget
         if (typeof permissionsString == 'undefined'){
             perm = {}
         }
@@ -171,18 +178,8 @@ define(function (require, exports) {
             perm = permissionsString('#permission_form','layers');
         }
 
-        if (geogig_enabled) {
-            geogig_store = $('#' + base_name + '\\:geogig_store').val();
-            geogig = $('#' + base_name + '\\:geogig_toggle').is(':checked') && geogig_store.length != 0;
-            if (geogig) {
-                form_data.append('geogig_store', geogig_store);
-            } else {
-                form_data.append('geogig_store', "");
-            }
-            form_data.append('geogig', geogig);
-        }
         if (time_enabled) {
-            time = $('#' + base_name + '-time').is(':checked');
+            time = (this.type && (this.type.main === 'shp' || this.type.main === 'csv'));
             form_data.append('time', time);
         }
         if (mosaic_enabled) {
@@ -268,9 +265,14 @@ define(function (require, exports) {
         form_data.append('charset', $('#charset').val());
         if ($('#id_metadata_upload_form').prop('checked')) {
              form_data.append('metadata_upload_form', true);
+             form_data.append('layer_title', $('#id_layer_title').val());
         }
         if ($('#id_metadata_uploaded_preserve').prop('checked')) {
              form_data.append('metadata_uploaded_preserve', true);
+        }
+        if ($('#id_style_upload_form').prop('checked')) {
+             form_data.append('style_upload_form', true);
+             form_data.append('layer_title', $('#id_layer_title').val());
         }
         return form_data;
     };
@@ -291,6 +293,7 @@ define(function (require, exports) {
      *  @returns {string}
      */
     LayerInfo.prototype.markError = function (error, status) {
+        var error = (error != undefined ? error : 'Unexpected error!');
         common.logError(error, this.element.find('#status'));
     };
 
@@ -311,29 +314,74 @@ define(function (require, exports) {
     };
 
     LayerInfo.prototype.doResume = function (event) {
+        $(this).text('Done').attr('disabled','disabled');
+        var id = (new Date()).getTime();
+        /* ****
+         * AF: Switching those two below allows to open a new window instead of redirecting
+         *     the active one.
+         * ****/
+	    // var newWin = window.open(window.location.href,
+        //        id, "toolbar=1,scrollbars=1,location=0,statusbar=0,menubar=1,resizable=1,width=1100,height=800,left = 240,top = 100");
         common.make_request({
             url: event.data.url,
             async: true,
             failure: function (resp, status) {
-                self.markError(resp.errors, status);
+                if (resp && resp.errors) {
+                    self.markError(resp.errors, status);
+                } else {
+                    self.markError(gettext('Unexpected Error'), status);
+                }
             },
             success: function (resp, status) {
                 if(resp.url && resp.input_required){
+                    /* ****
+                     * AF: Switching those two below allows to open a new window instead of redirecting
+                     *     the active one.
+                     * ****/
                     window.location = resp.url;
+                    /* newWin.location = resp.url;
+                    newWin.focus(); */
                 }else {
+                    /* ****
+                     * AF: Switching those two below allows to open a new window instead of redirecting
+                     *     the active one.
+                     * ****/
                     window.location = resp.redirect_to;
+                    /* newWin.location = resp.redirect_to;
+                    newWin.focus(); */
                 }
             },
         });
         return false;
     };
 
+    String.prototype.capitalize = function() {
+        return this.charAt(0).toUpperCase() + this.slice(1);
+    };
+
     LayerInfo.prototype.displayUploadedLayerLinks = function(resp) {
         var self = this;
-        var a = '<a href="' + resp.url + '" class="btn btn-success">' + gettext('Layer Info') + '</a>';
+        var resourceType = 'layer';
+        try {
+            resourceType = /^\/(.*)s\/.*/.exec(resp.url)[1];
+        } catch (err) {
+            // pass
+        }
+        var a = '<a href="' + resp.url + '" class="btn btn-success">' + gettext(resourceType.capitalize() + ' Info') + '</a>';
         var b = '<a href="' + resp.url + '/metadata" class="btn btn-warning">' + gettext('Edit Metadata') + '</a>';
         var c = '<a href="' + resp.url + '/metadata_upload" class="btn btn-warning">' + gettext('Upload Metadata') + '</a>';
-        var d = '<a href="' + resp.url.replace(/^\/layers/, '/gs') + '/style/manage" class="btn btn-warning">' + gettext('Manage Styles') + '</a>';
+        var d = '<a href="' + resp.url + '/style_upload" class="btn btn-warning">' + gettext('Upload SLD') + '</a>';
+        var e = '<a href="' + resp.url.replace(/^\/layers/, '/gs') + '/style/manage" class="btn btn-warning">' + gettext('Manage Styles') + '</a>';
+        if(resourceType != 'layer') {
+            // Only Layers have Metadata and SLD Upload features for the moment
+            c = '';
+            d = '';
+            e = '';
+        }
+        if(resp.ogc_backend == 'geonode.qgis_server'){
+            // QGIS Server has no manage style interaction.
+            d = '';
+        }
         var msg_col = "";
         if (resp.info){
             var msg_template = gettext('The column %1 was renamed to %2 <br/>');
@@ -342,7 +390,7 @@ define(function (require, exports) {
             }
         }
         self.logStatus({
-            msg: '<p>' + gettext('Your layer was successfully uploaded') + '<br/>' + msg_col + '<br/>' + a + '&nbsp;&nbsp;&nbsp;' + b + '&nbsp;&nbsp;&nbsp;' + c + '&nbsp;&nbsp;&nbsp;' + d + '</p>',
+            msg: '<p>' + gettext('Your ' + resourceType +' was successfully updated') + '<br/>' + msg_col + '<br/>' + a + '&nbsp;&nbsp;&nbsp;' + b + '&nbsp;&nbsp;&nbsp;' + c + '&nbsp;&nbsp;&nbsp;' + d + '&nbsp;&nbsp;&nbsp;' + e + '</p>',
             level: 'alert-success',
             empty: 'true'
         });
@@ -351,7 +399,7 @@ define(function (require, exports) {
     LayerInfo.prototype.startPolling = function() {
         var self = this;
         if (self.polling) {
-            $.ajax({ url: updateUrl("/upload/progress", 'id', self.id), type: 'GET', success: function(data){
+            $.ajax({ url: updateUrl(siteUrl + "upload/progress", 'id', self.id), type: 'GET', success: function(data){
                 // TODO: Not sure we need to do anything here?
                 //console.log('polling');
             }, dataType: "json", complete: setTimeout(function() {self.startPolling()}, 3000), timeout: 30000 });
@@ -363,15 +411,15 @@ define(function (require, exports) {
      *  @params {options}
      *  @returns {string}
      */
-    LayerInfo.prototype.doFinal = function (resp) {
+    LayerInfo.prototype.doFinal = function (resp, callback, array) {
         var self = this;
-        if (resp.hasOwnProperty('redirect_to') && resp.redirect_to.indexOf('/upload/final') > -1) {
+        if (resp.hasOwnProperty('redirect_to') && resp.redirect_to.indexOf('upload/final') > -1) {
             common.make_request({
                 url: resp.redirect_to,
                 async: true,
                 beforeSend: function() {
                     self.logStatus({
-                        msg: '<p>' + gettext('Performing Final GeoServer Config Step') + '<img class="pull-right" src="/static/geonode/img/loading.gif"></p>',
+                        msg: '<p>' + gettext('Performing Final GeoServer Config Step') + '<img class="pull-right" src="../../static/geonode/img/loading.gif"></p>',
                         level: 'alert-success',
                         empty: 'true'
                     });
@@ -381,6 +429,8 @@ define(function (require, exports) {
                 failure: function (resp, status) {
                     self.polling = false;
                     self.markError(resp.errors, status);
+
+                    callback(array);
                 },
                 success: function (resp, status) {
                     self.polling = false;
@@ -392,23 +442,41 @@ define(function (require, exports) {
                         });
                     } else if (resp.status === "pending") {
                         setTimeout(function() {
-                            self.doFinal(resp);
+                            self.doFinal(resp, callback, array);
                         }, 5000);
+                    } else if (resp.status === 'error') {
+                        self.polling = false;
+                        self.markError(resp.error_msg, resp.status);
+
+                        callback(array);
                     } else {
                         self.displayUploadedLayerLinks(resp);
+
+                        callback(array);
                     }
                 }
             });
         } else if (resp.status === "incomplete") {
             var id = common.parseQueryString(resp.url).id;
             var element = 'next_step_' + id
-            var a = '<a id="' + element + '" class="btn">Continue</a>';
+            var a = '<a id="' + element + '" class="btn btn-primary" target="_blank">Continue</a>';
+            var msg = '<p>' + gettext('Files are ready to be ingested!')
+
+            if (resp.redirect_to.indexOf('time') !== -1 || resp.url.indexOf('time') !== -1) {
+                msg += '&nbsp;' + gettext('A temporal dimension may be added to this Layer.') + '&nbsp;' + a + '</p>'
+            } else {
+                msg += '&nbsp;' + a + '</p>'
+            }
+
             self.logStatus({
-                msg:'<p>' + gettext('You need to specify more information in order to complete your upload.') + '</p><p>' + gettext('You can continue configuring your layer.') + '</p><p>' + a + '</p>',
+                msg: msg,
                 level: 'alert-success',
                 empty: 'true'
             });
             $("#" + element).on('click', resp, self.doResume);
+
+            callback(array);
+
             return;
         } else if (resp.status === "other") {
             self.logStatus({
@@ -416,16 +484,28 @@ define(function (require, exports) {
                 level: 'alert-success',
                 empty: 'true'
             });
+
+            callback(array);
+        } else if (resp.status === 'error') {
+            self.polling = false;
+            self.markError(resp.error_msg, resp.status);
+
+            callback(array);
         } else if (resp.success === true) {
             self.polling = false;
             self.displayUploadedLayerLinks(resp);
+
+            callback(array);
         } else {
             self.polling = false;
+            resp.errors = 'Unexpected Error';
             self.logStatus({
                 msg:'<p>' + gettext('Unexpected Error') + '</p>',
                 level: 'alert-error',
                 empty: 'true'
             });
+
+            callback(array);
         }
 
     };
@@ -435,7 +515,7 @@ define(function (require, exports) {
      *  @params {options}
      *  @returns {string}
      */
-    LayerInfo.prototype.doStep = function (resp) {
+    LayerInfo.prototype.doStep = function (resp, callback, array) {
         var self = this;
         self.logStatus({
             msg: '<p>' + gettext('Performing GeoServer Config Step') + '</p>',
@@ -448,27 +528,43 @@ define(function (require, exports) {
                 async: true,
                 failure: function (resp, status) {
                     self.polling = false;
-                    self.markError(resp.errors, status);
+                    if (resp.status && resp.status !== 'success') {
+                        self.markError(resp.error_msg, resp.status);
+                    } else {
+                        self.markError(resp.errors, status);
+                    }
+
+                    callback(array);
                 },
                 success: function (resp, status) {
                     self.id = resp.id;
                     if (resp.status === 'incomplete') {
                         if (resp.input_required === true) {
-                            self.doFinal(resp);
+                            self.doFinal(resp, callback, array);
                         } else {
-                            self.doStep(resp);
+                            self.doStep(resp, callback, array);
                         }
-                    } else if (resp.redirect_to.indexOf('/upload/final') > -1) {
-                        self.doFinal(resp);
+                    } else if (resp.status === 'error') {
+                        self.polling = false;
+                        self.markError(resp.error_msg, resp.status);
+
+                        callback(array);
+                    } else if (resp.redirect_to.indexOf('upload/final') > -1) {
+                        self.doFinal(resp, callback, array);
                     } else {
                         window.location = resp.url;
                     }
                 }
             });
+        } else if (resp.success === true && resp.status === 'error') {
+            self.polling = false;
+            self.markError(resp.error_msg, resp.status);
+
+            callback(array);
         } else if (resp.success === true && typeof resp.url != 'undefined') {
-            self.doFinal(resp);
-        } else if (resp.success === true && resp.redirect_to.indexOf('/upload/final') > -1) {
-            self.doFinal(resp);
+            self.doFinal(resp, callback, array);
+        } else if (resp.success === true && resp.redirect_to.indexOf('upload/final') > -1) {
+            self.doFinal(resp, callback, array);
         }
     };
 
@@ -477,16 +573,17 @@ define(function (require, exports) {
      *  @params
      *  @returns
      */
-    LayerInfo.prototype.uploadFiles = function () {
-        var form_data = this.prepareFormData(),
-            self = this;
+     LayerInfo.prototype.uploadFiles = function (callback, array) {
+        var form_data = this.prepareFormData(), self = this;
         var prog = "";
 
-        $.ajaxQueue({
+        $.ajax({
             url: form_target,
             async: true,
+            mode: "queue",
             type: "POST",
             data: form_data,
+            timeout: 600000, // sets timeout to 10 minutes
             processData: false,
             contentType: false,
             xhr: function() {
@@ -508,11 +605,31 @@ define(function (require, exports) {
             },
             error: function (jqXHR) {
                 self.polling = false;
-                if (jqXHR === null) {
-                    self.markError(gettext('Unexpected Error'));
+                if(jqXHR.status === 500 || jqXHR.status === 0 || jqXHR.readyState === 0){
+                  self.markError('Server Error: ' + jqXHR.statusText + gettext('<br>Please check your network connection. In case of Layer Upload make sure GeoServer is running and accepting connections.'));
+                } else if (jqXHR.status === 400 || jqXHR.status === 404) {
+                  if (jqXHR.responseJSON !== undefined && jqXHR.responseJSON !== null) {
+                      if (jqXHR.responseJSON.errors !== undefined) {
+                          self.markError('Client Error: ' + jqXHR.statusText + gettext('<br>' + jqXHR.responseJSON.errors));
+                      }
+                  } else if (jqXHR.responseText !== undefined && jqXHR.responseText !== null) {
+                      self.markError('Client Error: ' + jqXHR.statusText + gettext('<br>' + jqXHR.responseText));
+                  } else {
+                      self.markError('Client Error: ' + jqXHR.statusText + gettext('<br>Bad request or URL not found.'));
+                  }
                 } else {
-                    self.markError(jqXHR);
+                  if (jqXHR.responseJSON !== undefined && jqXHR.responseJSON !== null) {
+                      if (jqXHR.responseJSON.errors !== undefined) {
+                          self.markError('Unexpected Error: ' + jqXHR.statusText + gettext('<br>' + jqXHR.responseJSON.errors));
+                      }
+                  } else if (jqXHR.responseText !== undefined && jqXHR.responseText !== null) {
+                      self.markError('Unexpected Error: ' + jqXHR.statusText + gettext('<br>' + jqXHR.responseText));
+                  } else {
+                      self.markError('Unexpected Error: ' + jqXHR.statusText + gettext('<br>Unknown.'));
+                  }
                 }
+
+                callback(array);
             },
             success: function (resp, status) {
                 self.logStatus({
@@ -521,31 +638,10 @@ define(function (require, exports) {
                     empty: 'true'
                 });
                 self.id = resp.id;
-                self.doStep(resp);
+                self.doStep(resp, callback, array);
             }
-        });
-    };
-
-    LayerInfo.prototype.setupGeogigDropdown = function(selector){
-        function format(item){return item.name;};
-        $(selector).select2({
-           data: {results:geogig_stores, text:'name'},
-           formatSelection: format,
-           formatResult: format,
-           placeholder: gettext('Select or create a Geogig repository.'),
-
-            id: function(object) {
-             return object.name;
-           },
-            createSearchChoice:function(term, data) {
-             if ($(data).filter( function() {
-               return this.name.localeCompare(term)===0;
-             }).length===0) {
-               return {name:term.replace(/[`~!@#$%^&*()|+\-=?;:'",.<>\{\}\[\]\\\/]/gi, '')};
-             }
-           }
-          });
-    }
+         });
+     };
 
     /** Function to display the layers collected from the files
      * selected for uploading
@@ -561,9 +657,8 @@ define(function (require, exports) {
                 selector: LayerInfo.safeSelector(this.name),
                 type: this.type.name,
                 format: this.type.format,
-                geogig: geogig_enabled,
                 time: time_enabled,
-				mosaic: mosaic_enabled
+                mosaic: mosaic_enabled
             });
         file_queue.append(li);
         this.errors = this.collectErrors();
@@ -584,15 +679,15 @@ define(function (require, exports) {
 
              time_re_txt = input.val();
 
-			 var base_name = this.name.split('-timedim')[0];
+	     var base_name = this.name.split('-timedim')[0];
 
-			 $('#' + base_name + '-timedim-value-valid').show();
+	     $('#' + base_name + '-timedim-value-valid').show();
         });
 
         $('#' + this.name + '-timedim-presentation-format-select').on('change', function() {
              var input = $(this);
 
-			 var base_name = this.name.split('-timedim')[0];
+             var base_name = this.name.split('-timedim')[0];
 
              if (input.val() === 'DISCRETE_INTERVAL') {
                 $('#' + base_name + '-mosaic-timedim-presentation-res-options').show();
@@ -604,7 +699,7 @@ define(function (require, exports) {
         $('#' + this.name + '-timedim-defaultvalue-format-select').on('change', function() {
              var input = $(this);
 
-			 var base_name = this.name.split('-timedim')[0];
+              var base_name = this.name.split('-timedim')[0];
 
              if (input.val() === 'NEAREST' || input.val() === 'FIXED') {
                 $('#' + base_name + '-mosaic-timedim-defaultvalue-res-options').show();
@@ -619,10 +714,10 @@ define(function (require, exports) {
            var re = new RegExp(time_re_txt, "g");
            var is_valid = re.test(input.val());
            if(is_valid){
-		      $('#' + this.name + '-valid').hide();
-		   } else {
-		      $('#' + this.name + '-valid').show();
-	       }
+	      $('#' + this.name + '-valid').hide();
+	   } else {
+	      $('#' + this.name + '-valid').show();
+           }
         });
 
         $('#' + this.name + '-timedim-defaultvalue-ref-value').on('input', function() {
@@ -636,12 +731,6 @@ define(function (require, exports) {
 		      $('#' + this.name + '-valid').show();
 	       }
         });
-
-        $('#' + this.name + '\\:geogig_toggle').on('change', this.doGeoGigToggle);
-
-        // Add values to the geogig store dropdown and hide.
-        this.setupGeogigDropdown($('#' + this.name.split('.')[0] + '\\:geogig_store'));
-        $("#s2id_" + this.name + "\\:geogig_store").hide()
 
         return li;
     };
@@ -749,20 +838,6 @@ define(function (require, exports) {
         this.errors = this.collectErrors();
         this.displayFiles();
         this.displayErrors();
-    };
-
-    LayerInfo.prototype.doGeoGigToggle = function (event) {
-        var target = event.target || event.srcElement;
-        var id = target.id;
-        var base_name = id.split(':')[0];
-        var geogig = $('#' + id.replace(':', '\\:')).is(':checked');
-        if (geogig) {
-            $('#' + base_name + '\\:geogig_store').show();
-            $("#s2id_" + base_name + "\\:geogig_store").show()
-        } else {
-            $("#s2id_" + base_name + "\\:geogig_store").hide()
-            $('#' + base_name + '\\:geogig_store').hide();
-        }
     };
 
     LayerInfo.prototype.doImageMosaicToggle = function (event) {

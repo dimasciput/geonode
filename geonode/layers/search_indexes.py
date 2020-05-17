@@ -18,7 +18,7 @@
 #
 #########################################################################
 
-from agon_ratings.models import OverallRating
+from pinax.ratings.models import OverallRating
 from dialogos.models import Comment
 from django.contrib.contenttypes.models import ContentType
 from django.db.models import Avg
@@ -34,6 +34,8 @@ class LayerIndex(indexes.SearchIndex, indexes.Indexable):
     csw_wkt_geometry = indexes.CharField(model_attr="csw_wkt_geometry")
     detail_url = indexes.CharField(model_attr="get_absolute_url")
     owner__username = indexes.CharField(model_attr="owner", faceted=True, null=True)
+    is_published = indexes.BooleanField(model_attr="is_published")
+    featured = indexes.BooleanField(model_attr="featured")
     popular_count = indexes.IntegerField(
         model_attr="popular_count",
         default=0,
@@ -50,7 +52,7 @@ class LayerIndex(indexes.SearchIndex, indexes.Indexable):
     text = indexes.EdgeNgramField(document=True, use_template=True, stored=False)
     type = indexes.CharField(faceted=True)
     subtype = indexes.CharField(faceted=True)
-    typename = indexes.CharField(model_attr='typename')
+    alternate = indexes.CharField(model_attr='alternate')
     title_sortable = indexes.CharField(indexed=False, stored=False)  # Necessary for sorting
     category = indexes.CharField(
         model_attr="category__identifier",
@@ -96,7 +98,10 @@ class LayerIndex(indexes.SearchIndex, indexes.Indexable):
 
     def prepare_subtype(self, obj):
         if obj.storeType == "dataStore":
-            return "vector"
+            if obj.has_time:
+                return "vector_time"
+            else:
+                return "vector"
         elif obj.storeType == "coverageStore":
             return "raster"
         elif obj.storeType == "remoteStore":
@@ -129,7 +134,7 @@ class LayerIndex(indexes.SearchIndex, indexes.Indexable):
                 object_id=obj.pk,
                 content_type=ContentType.objects.get_for_model(obj)
             ).all().count()
-        except:
+        except Exception:
             return 0
 
     def prepare_title_sortable(self, obj):

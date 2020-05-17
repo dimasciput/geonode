@@ -18,25 +18,65 @@
 #
 #########################################################################
 
-from django.contrib.auth import get_user_model
-from django.core.urlresolvers import reverse
-from django.http import Http404, HttpResponseForbidden, HttpResponseRedirect, HttpResponseNotAllowed
-from django.shortcuts import render_to_response, get_object_or_404, redirect
-from django.template import RequestContext
-from django.views.decorators.http import require_POST
-from django.contrib.auth.decorators import login_required
-from django.views.generic import ListView
+import logging
 
 from actstream.models import Action
+from django.contrib.auth import get_user_model
+from django.contrib.auth.decorators import login_required
+from django.urls import reverse
+from django.http import (
+    Http404,
+    HttpResponseForbidden,
+    HttpResponseNotAllowed,
+    HttpResponseRedirect)
+from django.contrib import messages
+from django.shortcuts import (
+    get_object_or_404,
+    redirect,
+    render)
+from django.views.decorators.http import require_POST
+from django.views.generic import ListView, CreateView
+from django.views.generic.edit import UpdateView
+from django.views.generic.detail import DetailView
+from django.db.models import Q
 
-from geonode.groups.forms import GroupInviteForm, GroupForm, GroupUpdateForm, GroupMemberForm
-from geonode.groups.models import GroupProfile, GroupInvitation, GroupMember
+from geonode.decorators import view_decorator, superuser_only
+from geonode.base.views import SimpleSelect2View
+
+from dal import autocomplete
+
+from . import forms
+from . import models
+from .models import GroupMember
+
+logger = logging.getLogger(__name__)
 
 
-@login_required
+@view_decorator(superuser_only, subclass=True)
+class GroupCategoryCreateView(CreateView):
+    model = models.GroupCategory
+    fields = ['name', 'description']
+
+
+class GroupCategoryDetailView(DetailView):
+    model = models.GroupCategory
+
+
+class GroupCategoryUpdateView(UpdateView):
+    model = models.GroupCategory
+    fields = ['name', 'description']
+    template_name_suffix = '_update_form'
+
+
+group_category_create = GroupCategoryCreateView.as_view()
+group_category_detail = GroupCategoryDetailView.as_view()
+group_category_update = GroupCategoryUpdateView.as_view()
+
+
+@superuser_only
 def group_create(request):
     if request.method == "POST":
-        form = GroupForm(request.POST, request.FILES)
+        form = forms.GroupForm(request.POST, request.FILES)
         if form.is_valid():
             group = form.save(commit=False)
             group.save()
@@ -48,21 +88,20 @@ def group_create(request):
                     args=[
                         group.slug]))
     else:
-        form = GroupForm()
+        form = forms.GroupForm()
 
-    return render_to_response("groups/group_create.html", {
-        "form": form,
-    }, context_instance=RequestContext(request))
+    return render(request, "groups/group_create.html", context={"form": form})
 
 
 @login_required
 def group_update(request, slug):
-    group = GroupProfile.objects.get(slug=slug)
+    group = models.GroupProfile.objects.get(slug=slug)
     if not group.user_is_role(request.user, role="manager"):
         return HttpResponseForbidden()
 
     if request.method == "POST":
-        form = GroupUpdateForm(request.POST, request.FILES, instance=group)
+        form = forms.GroupUpdateForm(
+            request.POST, request.FILES, instance=group)
         if form.is_valid():
             group = form.save(commit=False)
             group.save()
@@ -73,16 +112,15 @@ def group_update(request, slug):
                     args=[
                         group.slug]))
     else:
-        form = GroupForm(instance=group)
+        form = forms.GroupForm(instance=group)
 
-    return render_to_response("groups/group_update.html", {
+    return render(request, "groups/group_update.html", context={
         "form": form,
         "group": group,
-    }, context_instance=RequestContext(request))
+    })
 
 
 class GroupDetailView(ListView):
-
     """
     Mixes a detail view (the group) with a ListView (the members).
     """
@@ -96,7 +134,8 @@ class GroupDetailView(ListView):
         return self.group.member_queryset()
 
     def get(self, request, *args, **kwargs):
-        self.group = get_object_or_404(GroupProfile, slug=kwargs.get('slug'))
+        self.group = get_object_or_404(
+            models.GroupProfile, slug=kwargs.get('slug'))
         return super(GroupDetailView, self).get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
@@ -104,6 +143,7 @@ class GroupDetailView(ListView):
         context['object'] = self.group
         context['maps'] = self.group.resources(resource_type='map')
         context['layers'] = self.group.resources(resource_type='layer')
+        context['documents'] = self.group.resources(resource_type='document')
         context['is_member'] = self.group.user_is_member(self.request.user)
         context['is_manager'] = self.group.user_is_role(
             self.request.user,
@@ -113,67 +153,82 @@ class GroupDetailView(ListView):
 
 
 def group_members(request, slug):
-    group = get_object_or_404(GroupProfile, slug=slug)
-    ctx = {}
-
+    group = get_object_or_404(models.GroupProfile, slug=slug)
     if not group.can_view(request.user):
         raise Http404()
-
-    if group.access in [
-            "public-invite",
-            "private"] and group.user_is_role(
-            request.user,
-            "manager"):
-        ctx["invite_form"] = GroupInviteForm()
-
-    if group.user_is_role(request.user, "manager"):
-        ctx["member_form"] = GroupMemberForm()
-
-    ctx.update({
-        "group": group,
-        "members": group.member_queryset(),
-        "is_member": group.user_is_member(request.user),
-        "is_manager": group.user_is_role(request.user, "manager"),
-    })
-    ctx = RequestContext(request, ctx)
-    return render_to_response("groups/group_members.html", ctx)
+    is_manager = group.user_is_role(request.user, "manager")
+    return render(
+        request,
+        "groups/group_members.html",
+        context={
+            "group": group,
+            "members": group.member_queryset(),
+            "member_form": forms.GroupMemberForm() if is_manager else None
+        }
+    )
 
 
 @require_POST
 @login_required
 def group_members_add(request, slug):
-    group = get_object_or_404(GroupProfile, slug=slug)
-
+    group = get_object_or_404(models.GroupProfile, slug=slug)
     if not group.user_is_role(request.user, role="manager"):
         return HttpResponseForbidden()
-
-    form = GroupMemberForm(request.POST)
-
+    form = forms.GroupMemberForm(request.POST)
     if form.is_valid():
-        role = form.cleaned_data["role"]
         for user in form.cleaned_data["user_identifiers"]:
-            group.join(user, role=role)
-
+            try:
+                group.join(
+                    user,
+                    role=GroupMember.MANAGER if form.cleaned_data[
+                        "manager_role"] else GroupMember.MEMBER
+                )
+            except Exception as e:
+                messages.add_message(request, messages.ERROR, e)
+                return redirect("group_members", slug=group.slug)
     return redirect("group_detail", slug=group.slug)
 
 
 @login_required
 def group_member_remove(request, slug, username):
-    group = get_object_or_404(GroupProfile, slug=slug)
+    group = get_object_or_404(models.GroupProfile, slug=slug)
     user = get_object_or_404(get_user_model(), username=username)
 
     if not group.user_is_role(request.user, role="manager"):
         return HttpResponseForbidden()
     else:
         GroupMember.objects.get(group=group, user=user).delete()
-        user.groups.remove(group.group)
         return redirect("group_detail", slug=group.slug)
+
+
+@login_required
+def group_member_promote(request, slug, username):
+    group = get_object_or_404(models.GroupProfile, slug=slug)
+    user = get_object_or_404(get_user_model(), username=username)
+
+    if not group.user_is_role(request.user, role="manager"):
+        return HttpResponseForbidden()
+    else:
+        GroupMember.objects.get(group=group, user=user).promote()
+        return redirect("group_members", slug=group.slug)
+
+
+@login_required
+def group_member_demote(request, slug, username):
+    group = get_object_or_404(models.GroupProfile, slug=slug)
+    user = get_object_or_404(get_user_model(), username=username)
+
+    if not group.user_is_role(request.user, role="manager"):
+        return HttpResponseForbidden()
+    else:
+        GroupMember.objects.get(group=group, user=user).demote()
+        return redirect("group_members", slug=group.slug)
 
 
 @require_POST
 @login_required
 def group_join(request, slug):
-    group = get_object_or_404(GroupProfile, slug=slug)
+    group = get_object_or_404(models.GroupProfile, slug=slug)
 
     if group.access == "private":
         raise Http404()
@@ -185,52 +240,13 @@ def group_join(request, slug):
         return redirect("group_detail", slug=group.slug)
 
 
-@require_POST
-def group_invite(request, slug):
-    group = get_object_or_404(GroupProfile, slug=slug)
-
-    if not group.can_invite(request.user):
-        raise Http404()
-
-    form = GroupInviteForm(request.POST)
-
-    if form.is_valid():
-        for user in form.cleaned_data["invite_user_identifiers"].split("\n"):
-            group.invite(
-                user,
-                request.user,
-                role=form.cleaned_data["invite_role"])
-
-    return redirect("group_members", slug=group.slug)
-
-
-@login_required
-def group_invite_response(request, token):
-    invite = get_object_or_404(GroupInvitation, token=token)
-    ctx = {"invite": invite}
-
-    if request.user != invite.user:
-        redirect("group_detail", slug=invite.group.slug)
-
-    if request.method == "POST":
-        if "accept" in request.POST:
-            invite.accept(request.user)
-
-        if "decline" in request.POST:
-            invite.decline()
-
-        return redirect("group_detail", slug=invite.group.slug)
-    else:
-        ctx = RequestContext(request, ctx)
-        return render_to_response("groups/group_invite_response.html", ctx)
-
-
 @login_required
 def group_remove(request, slug):
-    group = get_object_or_404(GroupProfile, slug=slug)
+    group = get_object_or_404(models.GroupProfile, slug=slug)
     if request.method == 'GET':
-        return render_to_response(
-            "groups/group_remove.html", RequestContext(request, {"group": group}))
+        return render(
+            request,
+            "groups/group_remove.html", context={"group": group})
     if request.method == 'POST':
 
         if not group.user_is_role(request.user, role="manager"):
@@ -259,7 +275,7 @@ class GroupActivityView(ListView):
 
     def get(self, request, *args, **kwargs):
         self.group = None
-        group = get_object_or_404(GroupProfile, slug=kwargs.get('slug'))
+        group = get_object_or_404(models.GroupProfile, slug=kwargs.get('slug'))
 
         if not group.can_view(request.user):
             raise Http404()
@@ -269,20 +285,67 @@ class GroupActivityView(ListView):
         return super(GroupActivityView, self).get(request, *args, **kwargs)
 
     def get_context_data(self, **kwargs):
+        def getKey(action):
+            return action.timestamp
+
         context = super(GroupActivityView, self).get_context_data(**kwargs)
         context['group'] = self.group
-        # Additional Filtered Lists Below
         members = ([(member.user.id) for member in self.group.member_queryset()])
-        context['action_list_layers'] = Action.objects.filter(
+        # Additional Filtered Lists Below
+        action_list = []
+        actions = Action.objects.filter(
             public=True,
-            actor_object_id__in=members,
-            action_object_content_type__model='layer')[:15]
-        context['action_list_maps'] = Action.objects.filter(
+            action_object_content_type__model='layer')
+        context['action_list_layers'] = [
+                                            action
+                                            for action in actions
+                                            if action.action_object and action.action_object.group == self.group.group][
+                                        :15]
+        action_list.extend(context['action_list_layers'])
+        actions = Action.objects.filter(
             public=True,
-            actor_object_id__in=members,
             action_object_content_type__model='map')[:15]
+        context['action_list_maps'] = [
+                                          action
+                                          for action in actions
+                                          if action.action_object and action.action_object.group == self.group.group][
+                                      :15]
+        action_list.extend(context['action_list_maps'])
+        actions = Action.objects.filter(
+            public=True,
+            action_object_content_type__model='document')[:15]
+        context['action_list_documents'] = [
+                                               action
+                                               for action in actions
+                                               if
+                                               action.action_object and action.action_object.group == self.group.group][
+                                           :15]
+        action_list.extend(context['action_list_documents'])
         context['action_list_comments'] = Action.objects.filter(
             public=True,
             actor_object_id__in=members,
             action_object_content_type__model='comment')[:15]
+        action_list.extend(context['action_list_comments'])
+        context['action_list'] = sorted(action_list, key=getKey, reverse=True)
         return context
+
+
+class GroupProfileAutocomplete(autocomplete.Select2QuerySetView):
+    def get_queryset(self):
+        request = self.request
+        user = request.user
+        qs = models.GroupProfile.objects.all()
+
+        if self.q:
+            qs = qs.filter(title__icontains=self.q)
+
+        if not user.is_authenticated or user.is_anonymous:
+            return qs.exclude(access='private')
+        elif not user.is_superuser:
+            return qs.filter(Q(pk__in=user.group_list_all()) | ~Q(access='private'))
+        return qs
+
+
+class GroupCategoryAutocomplete(SimpleSelect2View):
+    model = models.GroupCategory
+    filter_arg = 'name__icontains'

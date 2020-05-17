@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 #########################################################################
 #
-# Copyright (C) 2016 OSGeo
+# Copyright (C) 2017 OSGeo
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -30,6 +30,7 @@ class Command(BaseCommand):
     help = 'Start the MQ consumer to perform non blocking tasks'
 
     def handle(self, **options):
+
         queue_geoserver_events.purge()
         queue_notifications_events.purge()
         queue_email_events.purge()

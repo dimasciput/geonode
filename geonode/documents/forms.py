@@ -18,64 +18,84 @@
 #
 #########################################################################
 
-import json
+from geonode.base.forms import ResourceBaseForm
 import os
 import re
-import autocomplete_light
+import json
+import logging
 
 from django import forms
-from django.utils.translation import ugettext_lazy as _
+from django.utils.translation import ugettext as _
 from django.contrib.contenttypes.models import ContentType
 from django.conf import settings
-from django.forms import HiddenInput, TextInput
+from django.forms import HiddenInput
 from modeltranslation.forms import TranslationModelForm
 
-from geonode.documents.models import Document
+from geonode.documents.models import (
+    Document,
+    DocumentResourceLink,
+    get_related_resources,
+)
 from geonode.maps.models import Map
 from geonode.layers.models import Layer
 
-autocomplete_light.autodiscover() # flake8: noqa
-
-from geonode.base.forms import ResourceBaseForm
+logger = logging.getLogger(__name__)
 
 
-class DocumentForm(ResourceBaseForm):
+class DocumentFormMixin(object):
 
-    resource = forms.ChoiceField(label='Link to')
+    def generate_link_choices(self, resources=None):
+
+        if resources is None:
+            resources = list(Layer.objects.all())
+            resources += list(Map.objects.all())
+            resources.sort(key=lambda x: x.title)
+
+        choices = []
+        for obj in resources:
+            type_id = ContentType.objects.get_for_model(obj.__class__).id
+            choices.append([
+                "type:%s-id:%s" % (type_id, obj.id),
+                '%s (%s)' % (obj.title, obj.polymorphic_ctype.model)
+            ])
+
+        return choices
+
+    def generate_link_values(self, resources=None):
+        choices = self.generate_link_choices(resources=resources)
+        return [choice[0] for choice in choices]
+
+    def save_many2many(self, links_field='links'):
+        # create and fetch desired links
+        instances = []
+        for link in self.cleaned_data[links_field]:
+            matches = re.match(r"type:(\d+)-id:(\d+)", link)
+            if matches:
+                content_type = ContentType.objects.get(id=matches.group(1))
+                instance, _ = DocumentResourceLink.objects.get_or_create(
+                    document=self.instance,
+                    content_type=content_type,
+                    object_id=matches.group(2),
+                )
+                instances.append(instance)
+
+        # delete remaining links
+        DocumentResourceLink.objects\
+            .filter(document_id=self.instance.id).exclude(pk__in=[i.pk for i in instances]).delete()
+
+
+class DocumentForm(ResourceBaseForm, DocumentFormMixin):
+
+    links = forms.MultipleChoiceField(
+        label=_("Link to"),
+        required=False)
 
     def __init__(self, *args, **kwargs):
         super(DocumentForm, self).__init__(*args, **kwargs)
-        rbases = list(Layer.objects.all())
-        rbases += list(Map.objects.all())
-        rbases.sort(key=lambda x: x.title)
-        rbases_choices = []
-        rbases_choices.append(['no_link', '---------'])
-        for obj in rbases:
-            type_id = ContentType.objects.get_for_model(obj.__class__).id
-            obj_id = obj.id
-            form_value = "type:%s-id:%s" % (type_id, obj_id)
-            display_text = '%s (%s)' % (obj.title, obj.polymorphic_ctype.model)
-            rbases_choices.append([form_value, display_text])
-        self.fields['resource'].choices = rbases_choices
-        if self.instance.content_type:
-            self.fields['resource'].initial = 'type:%s-id:%s' % (
-                self.instance.content_type.id, self.instance.object_id)
-
-    def save(self, *args, **kwargs):
-        contenttype_id = None
-        contenttype = None
-        object_id = None
-        resource = self.cleaned_data['resource']
-        if resource != 'no_link':
-            matches = re.match("type:(\d+)-id:(\d+)", resource).groups()
-            contenttype_id = matches[0]
-            object_id = matches[1]
-            contenttype = ContentType.objects.get(id=contenttype_id)
-        self.cleaned_data['content_type'] = contenttype_id
-        self.cleaned_data['object_id'] = object_id
-        self.instance.object_id = object_id
-        self.instance.content_type = contenttype
-        return super(DocumentForm, self).save(*args, **kwargs)
+        self.fields['links'].choices = self.generate_link_choices()
+        self.fields['links'].initial = self.generate_link_values(
+            resources=get_related_resources(self.instance)
+        )
 
     class Meta(ResourceBaseForm.Meta):
         model = Document
@@ -89,9 +109,9 @@ class DocumentForm(ResourceBaseForm):
 
 
 class DocumentDescriptionForm(forms.Form):
-    title = forms.CharField(300)
-    abstract = forms.CharField(1000, widget=forms.Textarea, required=False)
-    keywords = forms.CharField(500, required=False)
+    title = forms.CharField(max_length=300)
+    abstract = forms.CharField(max_length=2000, widget=forms.Textarea, required=False)
+    keywords = forms.CharField(max_length=500, required=False)
 
 
 class DocumentReplaceForm(forms.ModelForm):
@@ -135,7 +155,7 @@ class DocumentReplaceForm(forms.ModelForm):
         return doc_file
 
 
-class DocumentCreateForm(TranslationModelForm):
+class DocumentCreateForm(TranslationModelForm, DocumentFormMixin):
 
     """
     The document upload form.
@@ -146,13 +166,10 @@ class DocumentCreateForm(TranslationModelForm):
                 'name': 'permissions',
                 'id': 'permissions'}),
         required=True)
-    resource = forms.CharField(
-        required=False,
+
+    links = forms.MultipleChoiceField(
         label=_("Link to"),
-        widget=TextInput(
-            attrs={
-                'name': 'title__contains',
-                'id': 'resource'}))
+        required=False)
 
     class Meta:
         model = Document
@@ -160,6 +177,10 @@ class DocumentCreateForm(TranslationModelForm):
         widgets = {
             'name': HiddenInput(attrs={'cols': 80, 'rows': 20}),
         }
+
+    def __init__(self, *args, **kwargs):
+        super(DocumentCreateForm, self).__init__(*args, **kwargs)
+        self.fields['links'].choices = self.generate_link_choices()
 
     def clean_permissions(self):
         """
@@ -181,9 +202,11 @@ class DocumentCreateForm(TranslationModelForm):
         doc_url = self.cleaned_data.get('doc_url')
 
         if not doc_file and not doc_url:
+            logger.debug("Document must be a file or url.")
             raise forms.ValidationError(_("Document must be a file or url."))
 
         if doc_file and doc_url:
+            logger.debug("A document cannot have both a file and a url.")
             raise forms.ValidationError(
                 _("A document cannot have both a file and a url."))
 
@@ -198,6 +221,7 @@ class DocumentCreateForm(TranslationModelForm):
         if doc_file and not os.path.splitext(
                 doc_file.name)[1].lower()[
                 1:] in settings.ALLOWED_DOCUMENT_TYPES:
+            logger.debug("This file type is not allowed")
             raise forms.ValidationError(_("This file type is not allowed"))
 
         return doc_file

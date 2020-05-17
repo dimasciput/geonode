@@ -19,10 +19,19 @@
 #########################################################################
 
 from django.contrib import admin
+from django.db.models import Prefetch
 
-from geonode.base.admin import MediaTranslationAdmin, ResourceBaseAdminForm
+from modeltranslation.admin import TabbedTranslationAdmin
+
+from geonode.base.admin import ResourceBaseAdminForm
+from geonode.base.admin import metadata_batch_edit, set_batch_permissions
 from geonode.layers.models import Layer, Attribute, Style
 from geonode.layers.models import LayerFile, UploadSession
+
+from geonode.base.fields import MultiThesauriField
+from geonode.base.models import ThesaurusKeyword, ThesaurusKeywordLabel
+
+from dal import autocomplete
 
 
 class AttributeInline(admin.TabularInline):
@@ -31,29 +40,47 @@ class AttributeInline(admin.TabularInline):
 
 class LayerAdminForm(ResourceBaseAdminForm):
 
-    class Meta:
+    class Meta(ResourceBaseAdminForm.Meta):
         model = Layer
         fields = '__all__'
 
+    tkeywords = MultiThesauriField(
+        queryset=ThesaurusKeyword.objects.prefetch_related(
+            Prefetch('keyword', queryset=ThesaurusKeywordLabel.objects.filter(lang='en'))
+        ),
+        widget=autocomplete.ModelSelect2Multiple(
+            url='thesaurus_autocomplete',
+        ),
+        label=("Keywords from Thesaurus"),
+        required=False,
+        help_text=("List of keywords from Thesaurus",),
+    )
 
-class LayerAdmin(MediaTranslationAdmin):
+
+class LayerAdmin(TabbedTranslationAdmin):
     list_display = (
         'id',
-        'typename',
-        'service_type',
+        'alternate',
         'title',
         'date',
-        'category')
+        'category',
+        'group',
+        'is_approved',
+        'is_published',
+        'metadata_completeness')
     list_display_links = ('id',)
-    list_editable = ('title', 'category')
-    list_filter = ('storeType', 'owner', 'category',
-                   'restriction_code_type__identifier', 'date', 'date_type')
-    search_fields = ('typename', 'title', 'abstract', 'purpose',)
+    list_editable = ('title', 'category', 'group', 'is_approved', 'is_published')
+    list_filter = ('storeType', 'owner', 'category', 'group',
+                   'restriction_code_type__identifier', 'date', 'date_type',
+                   'is_approved', 'is_published')
+    search_fields = ('alternate', 'title', 'abstract', 'purpose',
+                     'is_approved', 'is_published',)
     filter_horizontal = ('contacts',)
     date_hierarchy = 'date'
-    readonly_fields = ('uuid', 'typename', 'workspace')
+    readonly_fields = ('uuid', 'alternate', 'workspace')
     inlines = [AttributeInline]
     form = LayerAdminForm
+    actions = [metadata_batch_edit, set_batch_permissions]
 
 
 class AttributeAdmin(admin.ModelAdmin):
@@ -85,7 +112,7 @@ class LayerFileInline(admin.TabularInline):
 
 class UploadSessionAdmin(admin.ModelAdmin):
     model = UploadSession
-    list_display = ('date', 'user', 'processed')
+    list_display = ('resource', 'date', 'user', 'processed')
     inlines = [LayerFileInline]
 
 

@@ -2,17 +2,19 @@
 
 {% load i18n %}
 {% load base_tags %}
+{% load client_lib_tags %}
 
 {% block title %} {% trans "Map" %} - {{ block.super }} {% endblock %}
 
 {% block head %}
-	{% if preview == 'geoext' %}
-		{% include 'maps/map_geoexplorer.js' %}
-	{% elif preview == 'react' %}
-		{% include 'geonode-client/map_view.html' %}
-	{% else %}
-		{% include 'maps/map_geoexplorer.js' %}
-	{% endif %}
+
+    <style>
+        #paneltbar {
+            margin-top: 90px !important;
+        }
+    </style>
+
+    {% get_map_view %}
 	{{ block.super }}
 {% endblock %}
 {% block footer %}{% endblock %}

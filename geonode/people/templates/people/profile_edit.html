@@ -2,7 +2,7 @@
 {% load i18n avatar_tags %}
 {% load bootstrap_tags %}
 
-{% block body_class %}edit people{% endblock %}
+{% block body_class %}{% trans "edit people" %}{% endblock %}
 
 {% block body %}
 <div class="page-header">
@@ -14,7 +14,7 @@
 </div>
 
 <div class="col-xs-3 col-md-2 profile-image">
-  {% avatar profile.username 240 %}
+  {% autoescape off %}{% avatar profile.username 240 %}{% endautoescape %}
   {% if user == profile %}
   <p><a class="btn btn-primary btn-block" href="{% url 'avatar_change' %}">{% trans "Change your avatar" %}</a></p>
   {% endif %}

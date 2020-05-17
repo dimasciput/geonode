@@ -18,10 +18,23 @@
 #
 #########################################################################
 
-from django.conf.urls import patterns, url
+from django.conf.urls import url
 
-urlpatterns = patterns('geonode.security.views',
-                       url(r'^permissions/(?P<resource_id>\d+)$', 'resource_permissions', name='resource_permissions'),
-                       url(r'^bulk-permissions/?$', 'set_bulk_permissions', name='bulk_permissions'),
-                       url(r'^request-permissions/?$', 'request_permissions', name='request_permissions'),
-                       )
+from . import views
+
+urlpatterns = [
+    url(r'^permissions/(?P<resource_id>\d+)$',
+        views.resource_permissions, name='resource_permissions'),
+    url(r'^geolimits/(?P<resource_id>\d+)$',
+        views.resource_geolimits, name='resource_geolimits'),
+    url(r'^bulk-permissions/?$',
+        views.set_bulk_permissions, name='bulk_permissions'),
+    url(r'^request-permissions/?$',
+        views.request_permissions, name='request_permissions'),
+    url(r'^invalidate-permissions-cache/?$',
+        views.invalidate_permissions_cache, name='invalidate_permissions_cache'),
+    url(r'^invalidate_tiledlayer_cache/?$',
+        views.invalidate_tiledlayer_cache, name='invalidate_tiledlayer_cache'),
+    url(r'^attributes_sats_refresh/?$',
+        views.attributes_sats_refresh, name='attributes_sats_refresh'),
+]

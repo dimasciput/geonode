@@ -20,12 +20,10 @@
 
 import os
 
-__version__ = (2, 7, 0, 'alpha', 0)
+__version__ = (3, 0, 0, 'final', 0)
 
 
-class GeoNodeException(Exception):
-    """Base class for exceptions in this module."""
-    pass
+default_app_config = "geonode.apps.AppConfig"
 
 
 def get_version():
@@ -38,3 +36,8 @@ def main(global_settings, **settings):
     os.environ.setdefault('DJANGO_SETTINGS_MODULE', settings.get('django_settings'))
     app = get_wsgi_application()
     return app
+
+
+class GeoNodeException(Exception):
+    """Base class for exceptions in this module."""
+    pass

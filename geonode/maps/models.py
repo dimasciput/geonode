@@ -24,28 +24,31 @@ import uuid
 from django.conf import settings
 from django.db import models
 from django.db.models import signals
-try:
-    import json
-except ImportError:
-    from django.utils import simplejson as json
+import json
 from django.contrib.contenttypes.models import ContentType
 from django.utils.translation import ugettext_lazy as _
 from django.core.exceptions import ObjectDoesNotExist
-from django.core.urlresolvers import reverse
+from django.urls import reverse
 from django.template.defaultfilters import slugify
 from django.core.cache import cache
 
 from geonode.layers.models import Layer
+from geonode.compat import ensure_string
 from geonode.base.models import ResourceBase, resourcebase_post_save
 from geonode.maps.signals import map_changed_signal
-from geonode.utils import GXPMapBase
-from geonode.utils import GXPLayerBase
-from geonode.utils import layer_from_viewer_config
-from geonode.utils import default_map_config
-from geonode.utils import num_encode
-from geonode.security.models import remove_object_permissions
+from geonode.security.utils import remove_object_permissions
+from geonode.client.hooks import hookset
+from geonode.utils import (GXPMapBase,
+                           GXPLayerBase,
+                           layer_from_viewer_config,
+                           default_map_config,
+                           num_encode)
 
-from agon_ratings.models import OverallRating
+from geonode import geoserver, qgis_server  # noqa
+from geonode.utils import check_ogc_backend
+
+from deprecated import deprecated
+from pinax.ratings.models import OverallRating
 
 logger = logging.getLogger("geonode.maps.models")
 
@@ -87,7 +90,7 @@ class Map(ResourceBase, GXPMapBase):
         blank=True)
     # Full URL for featured map view, ie http://domain/someview
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s by %s' % (
             self.title, (self.owner.username if self.owner else "<Anonymous>"))
 
@@ -107,7 +110,7 @@ class Map(ResourceBase, GXPMapBase):
     @property
     def local_layers(self):
         layer_names = MapLayer.objects.filter(map__id=self.id).values('name')
-        return Layer.objects.filter(typename__in=layer_names) | \
+        return Layer.objects.filter(alternate__in=layer_names) | \
             Layer.objects.filter(name__in=layer_names)
 
     def json(self, layer_filter):
@@ -119,7 +122,7 @@ class Map(ResourceBase, GXPMapBase):
         layers = []
         for map_layer in map_layers:
             if map_layer.local:
-                layer = Layer.objects.get(typename=map_layer.name)
+                layer = Layer.objects.get(alternate=map_layer.name)
                 layers.append(layer)
             else:
                 pass
@@ -143,8 +146,8 @@ class Map(ResourceBase, GXPMapBase):
 
         def layer_json(lyr):
             return {
-                "name": lyr.typename,
-                "service": lyr.service_type,
+                "name": lyr.alternate,
+                "service": lyr.service_type if hasattr(lyr, 'service_type') else "QGIS Server",
                 "serviceURL": "",
                 "metadataURL": ""
             }
@@ -157,50 +160,86 @@ class Map(ResourceBase, GXPMapBase):
 
         return json.dumps(map_config)
 
-    def update_from_viewer(self, conf):
+    def update_from_viewer(self, conf, context=None):
         """
         Update this Map's details by parsing a JSON object as produced by
         a GXP Viewer.
 
         This method automatically persists to the database!
         """
-        if isinstance(conf, basestring):
-            conf = json.loads(conf)
 
-        self.title = conf['about']['title']
-        self.abstract = conf['about']['abstract']
+        template_name = hookset.update_from_viewer(conf, context=context)
+        if not isinstance(context, dict):
+            try:
+                context = json.loads(ensure_string(context))
+            except Exception:
+                pass
 
-        self.set_bounds_from_center_and_zoom(
-            conf['map']['center'][0],
-            conf['map']['center'][1],
-            conf['map']['zoom'])
+        conf = context.get("config", {})
+        if not isinstance(conf, dict) or isinstance(conf, bytes):
+            try:
+                conf = json.loads(ensure_string(conf))
+            except Exception:
+                conf = {}
 
-        self.projection = conf['map']['projection']
+        about = conf.get("about", {})
+        self.title = conf.get("title", about.get("title", ""))
+        self.abstract = conf.get("abstract", about.get("abstract", ""))
+
+        _map = conf.get("map", {})
+        center = _map.get("center", settings.DEFAULT_MAP_CENTER)
+        self.zoom = _map.get("zoom", settings.DEFAULT_MAP_ZOOM)
+
+        if isinstance(center, dict):
+            self.center_x = center.get('x')
+            self.center_y = center.get('y')
+        else:
+            self.center_x, self.center_y = center
+
+        projection = _map.get("projection", None)
+        bbox = _map.get("bbox", None)
+
+        if bbox:
+            self.set_bounds_from_bbox(bbox, projection)
+        else:
+            self.set_bounds_from_center_and_zoom(
+                self.center_x,
+                self.center_y,
+                self.zoom)
+
+        if self.projection is None or self.projection == '':
+            self.projection = projection
 
         if self.uuid is None or self.uuid == '':
             self.uuid = str(uuid.uuid1())
 
         def source_for(layer):
-            return conf["sources"][layer["source"]]
+            try:
+                return conf["sources"][layer["source"]]
+            except Exception:
+                if 'url' in layer:
+                    return {'url': layer['url']}
+                else:
+                    return {}
 
-        layers = [l for l in conf["map"]["layers"]]
-        layer_names = set([l.typename for l in self.local_layers])
+        layers = [l for l in _map.get("layers", [])]
+        layer_names = set(l.alternate for l in self.local_layers)
 
-        for layer in self.layer_set.all():
-            layer.delete()
-
-        self.keywords.add(*conf['map'].get('keywords', []))
+        self.layer_set.all().delete()
+        self.keywords.add(*_map.get('keywords', []))
 
         for ordering, layer in enumerate(layers):
             self.layer_set.add(
                 layer_from_viewer_config(
-                    MapLayer, layer, source_for(layer), ordering
+                    self.id, MapLayer, layer, source_for(layer), ordering
                 ))
 
-        self.save()
+        self.save(notify=True)
 
-        if layer_names != set([l.typename for l in self.local_layers]):
+        if layer_names != set([l.alternate for l in self.local_layers]):
             map_changed_signal.send_robust(sender=self, what_changed='layers')
+
+        return template_name
 
     def keyword_list(self):
         keywords_qs = self.keywords.all()
@@ -210,11 +249,13 @@ class Map(ResourceBase, GXPMapBase):
             return []
 
     def get_absolute_url(self):
-        return reverse('geonode.maps.views.map_detail', None, [str(self.id)])
+        return reverse('map_detail', None, [str(self.id)])
 
     def get_bbox_from_layers(self, layers):
         """
         Calculate the bbox from a given list of Layer objects
+
+        bbox format: [xmin, xmax, ymin, ymax]
         """
         bbox = None
         for layer in layers:
@@ -233,23 +274,21 @@ class Map(ResourceBase, GXPMapBase):
         self.owner = user
         self.title = title
         self.abstract = abstract
-        self.projection = getattr(settings, 'DEFAULT_MAP_CRS', 'EPSG:900913')
+        self.projection = getattr(settings, 'DEFAULT_MAP_CRS', 'EPSG:3857')
         self.zoom = 0
         self.center_x = 0
         self.center_y = 0
-        bbox = None
-        index = 0
+
+        if self.uuid is None or self.uuid == '':
+            self.uuid = str(uuid.uuid1())
 
         DEFAULT_MAP_CONFIG, DEFAULT_BASE_LAYERS = default_map_config(None)
 
-        # Save the map in order to create an id in the database
-        # used below for the maplayers.
-        self.save()
-
+        _layers = []
         for layer in layers:
             if not isinstance(layer, Layer):
                 try:
-                    layer = Layer.objects.get(typename=layer)
+                    layer = Layer.objects.get(alternate=layer)
                 except ObjectDoesNotExist:
                     raise Exception(
                         'Could not find layer with name %s' %
@@ -259,29 +298,41 @@ class Map(ResourceBase, GXPMapBase):
                     'base.view_resourcebase',
                     obj=layer.resourcebase_ptr):
                 # invisible layer, skip inclusion or raise Exception?
-                raise Exception(
+                logger.error(
                     'User %s tried to create a map with layer %s without having premissions' %
                     (user, layer))
-            MapLayer.objects.create(
-                map=self,
-                name=layer.typename,
-                ows_url=layer.get_ows_url(),
-                stack_order=index,
-                visibility=True
-            )
-
-            index += 1
+            else:
+                _layers.append(layer)
 
         # Set bounding box based on all layers extents.
-        bbox = self.get_bbox_from_layers(self.local_layers)
+        # bbox format: [xmin, xmax, ymin, ymax]
+        bbox = self.get_bbox_from_layers(_layers)
+        self.set_bounds_from_bbox(bbox, self.projection)
 
-        self.set_bounds_from_bbox(bbox)
+        # Save the map in order to create an id in the database
+        # used below for the maplayers.
+        self.save()
 
-        self.set_missing_info()
+        if _layers and len(_layers) > 0:
+            index = 0
+            for layer in _layers:
+                MapLayer.objects.create(
+                    map=self,
+                    name=layer.alternate,
+                    ows_url=layer.get_ows_url(),
+                    stack_order=index,
+                    visibility=True
+                )
+                index += 1
 
         # Save again to persist the zoom and bbox changes and
         # to generate the thumbnail.
-        self.save()
+        self.set_missing_info()
+        self.save(notify=True)
+
+    @property
+    def sender(self):
+        return None
 
     @property
     def class_name(self):
@@ -310,21 +361,28 @@ class Map(ResourceBase, GXPMapBase):
         """
         Returns layer group name from local OWS for this map instance.
         """
-        if 'geonode.geoserver' in settings.INSTALLED_APPS:
+        if check_ogc_backend(geoserver.BACKEND_PACKAGE):
             from geonode.geoserver.helpers import gs_catalog, ogc_server_settings
             lg_name = '%s_%d' % (slugify(self.title), self.id)
-            return {
-                'catalog': gs_catalog.get_layergroup(lg_name),
-                'ows': ogc_server_settings.ows
+            try:
+                return {
+                    'catalog': gs_catalog.get_layergroup(lg_name),
+                    'ows': ogc_server_settings.ows
+                }
+            except Exception:
+                return {
+                    'catalog': None,
+                    'ows': ogc_server_settings.ows
                 }
         else:
             return None
 
+    @deprecated(version='2.10.1', reason="APIs have been changed on geospatial service")
     def publish_layer_group(self):
         """
         Publishes local map layers as WMS layer group on local OWS.
         """
-        if 'geonode.geoserver' in settings.INSTALLED_APPS:
+        if check_ogc_backend(geoserver.BACKEND_PACKAGE):
             from geonode.geoserver.helpers import gs_catalog
             from geoserver.layergroup import UnsavedLayerGroup as GsUnsavedLayerGroup
         else:
@@ -343,7 +401,7 @@ class Map(ResourceBase, GXPMapBase):
         lg_styles = []
         for ml in map_layers:
             if ml.local:
-                layer = Layer.objects.get(typename=ml.name)
+                layer = Layer.objects.get(alternate=ml.name)
                 style = ml.styles or getattr(layer.default_style, 'name', '')
                 layers.append(layer)
                 lg_styles.append(style)
@@ -379,23 +437,24 @@ class MapLayer(models.Model, GXPLayerBase):
     and the file format to use for image tiles.
     """
 
-    map = models.ForeignKey(Map, related_name="layer_set")
+    map = models.ForeignKey(Map, related_name="layer_set", on_delete=models.CASCADE)
     # The map containing this layer
 
     stack_order = models.IntegerField(_('stack order'))
     # The z-index of this layer in the map; layers with a higher stack_order will
     # be drawn on top of others.
 
-    format = models.CharField(
+    format = models.TextField(
         _('format'),
         null=True,
-        max_length=200,
         blank=True)
     # The content_type of the image format to use for tiles (image/png, image/jpeg,
     # image/gif...)
 
-    name = models.CharField(_('name'), null=True, max_length=200)
+    name = models.TextField(_('name'), null=True)
     # The name of the layer to load.
+
+    store = models.TextField(_('store'), null=True)
 
     # The interpretation of this name depends on the source of the layer (Google
     # has a fixed set of names, WMS services publish a list of available layers
@@ -404,10 +463,9 @@ class MapLayer(models.Model, GXPLayerBase):
     opacity = models.FloatField(_('opacity'), default=1.0)
     # The opacity with which to render this layer, on a scale from 0 to 1.
 
-    styles = models.CharField(
+    styles = models.TextField(
         _('styles'),
         null=True,
-        max_length=200,
         blank=True)
     # The name of the style to use for this layer (only useful for WMS layers.)
 
@@ -419,7 +477,7 @@ class MapLayer(models.Model, GXPLayerBase):
     # A boolean value, true if we should prevent the user from dragging and
     # dropping this layer in the layer chooser.
 
-    group = models.CharField(_('group'), null=True, max_length=200, blank=True)
+    group = models.TextField(_('group'), null=True, blank=True)
     # A group label to apply to this layer.  This affects the hierarchy displayed
     # in the map viewer's layer tree.
 
@@ -459,14 +517,14 @@ class MapLayer(models.Model, GXPLayerBase):
         cfg = GXPLayerBase.layer_config(self, user=user)
         # if this is a local layer, get the attribute configuration that
         # determines display order & attribute labels
-        if Layer.objects.filter(typename=self.name).exists():
+        if Layer.objects.filter(alternate=self.name).exists():
             try:
                 if self.local:
-                    layer = Layer.objects.get(typename=self.name)
+                    layer = Layer.objects.get(store=self.store, alternate=self.name)
                 else:
                     layer = Layer.objects.get(
-                        typename=self.name,
-                        service__base_url=self.ows_url)
+                        alternate=self.name,
+                        remote_service__base_url=self.ows_url)
                 attribute_cfg = layer.attribute_config()
                 if "getFeatureInfo" in attribute_cfg:
                     cfg["getFeatureInfo"] = attribute_cfg["getFeatureInfo"]
@@ -475,7 +533,7 @@ class MapLayer(models.Model, GXPLayerBase):
                         obj=layer.resourcebase_ptr):
                     cfg['disabled'] = True
                     cfg['visibility'] = False
-            except:
+            except Exception:
                 # shows maplayer with pink tiles,
                 # and signals that there is problem
                 # TODO: clear orphaned MapLayers
@@ -493,26 +551,42 @@ class MapLayer(models.Model, GXPLayerBase):
 
     @property
     def layer_title(self):
-        if self.local:
-            title = Layer.objects.get(typename=self.name).title
-        else:
+        title = None
+        try:
+            if self.local:
+                if self.store:
+                    title = Layer.objects.get(
+                        store=self.store, alternate=self.name).title
+                else:
+                    title = Layer.objects.get(alternate=self.name).title
+        except Exception:
+            title = None
+        if title is None:
             title = self.name
         return title
 
     @property
     def local_link(self):
-        if self.local:
-            layer = Layer.objects.get(typename=self.name)
-            link = "<a href=\"%s\">%s</a>" % (
-                layer.get_absolute_url(), layer.title)
-        else:
+        link = None
+        try:
+            if self.local:
+                if self.store:
+                    layer = Layer.objects.get(
+                        store=self.store, alternate=self.name)
+                else:
+                    layer = Layer.objects.get(alternate=self.name)
+                link = "<a href=\"%s\">%s</a>" % (
+                    layer.get_absolute_url(), layer.title)
+        except Exception:
+            link = None
+        if link is None:
             link = "<span>%s</span> " % self.name
         return link
 
     class Meta:
         ordering = ["stack_order"]
 
-    def __unicode__(self):
+    def __str__(self):
         return '%s?layers=%s' % (self.ows_url, self.name)
 
 
@@ -525,7 +599,7 @@ def pre_delete_map(instance, sender, **kwrargs):
 
 
 class MapSnapshot(models.Model):
-    map = models.ForeignKey(Map, related_name="snapshot_set")
+    map = models.ForeignKey(Map, related_name="snapshot_set", on_delete=models.CASCADE)
     """
     The ID of the map this snapshot was generated from.
     """
@@ -540,7 +614,7 @@ class MapSnapshot(models.Model):
     The date/time the snapshot was created.
     """
 
-    user = models.ForeignKey(settings.AUTH_USER_MODEL, blank=True, null=True)
+    user = models.ForeignKey(settings.AUTH_USER_MODEL, blank=True, null=True, on_delete=models.CASCADE)
     """
     The user who created the snapshot.
     """

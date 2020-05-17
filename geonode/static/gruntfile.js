@@ -1,4 +1,28 @@
+/*jshint esversion: 6 */
+
 module.exports = function(grunt) {
+  /* include the dependency definitions */
+  let fileHandling = grunt.file.readJSON('static_dependencies.json');
+
+  /* rewirte the path from node_modules to lib/ */
+  let assetsMinifiedJs = fileHandling["assets.min.js"].map (
+    fileSegment => 'lib/js/' + fileSegment.substring(fileSegment.lastIndexOf('/')+1)
+  );
+  let leafletPluginsMinifiedJs = fileHandling["leaflet-plugins.min.js"].map (
+    fileSegment => 'lib/js/' + fileSegment.substring(fileSegment.lastIndexOf('/')+1)
+  );
+  let openlayersPluginsMinifiedJs = fileHandling["openlayers-plugins.min.js"].map(
+    fileSegment => 'lib/js/' + fileSegment.substring(fileSegment.lastIndexOf('/') + 1)
+  );
+  let assetsMinifiedCss = fileHandling["assets.min.css"].map (
+    fileSegment => 'lib/css/' + fileSegment.substring(fileSegment.lastIndexOf('/')+1)
+  );
+  let leafletMinifiedCss = fileHandling["leaflet.plugins.min.css"].map (
+    fileSegment => 'lib/css/' + fileSegment.substring(fileSegment.lastIndexOf('/')+1)
+  );
+  let openlayersMinifiedCss = fileHandling["openlayers.plugins.min.css"].map(
+    fileSegment => 'lib/css/' + fileSegment.substring(fileSegment.lastIndexOf('/') + 1)
+  );
 
   grunt.initConfig({
     pkg: grunt.file.readJSON('package.json'),
@@ -16,6 +40,10 @@ module.exports = function(grunt) {
       }
     },
 
+    clean: {
+      lib: ['lib/']
+    },
+
     less: {
       development: {
         options: {
@@ -25,20 +53,23 @@ module.exports = function(grunt) {
         },
         files: [
           {
-            // includes bootstrap.css
-            'geonode/css/base.css': 'geonode/less/base.less'
+            'geonode/css/base.css': 'geonode/less/base.less',
+            'geonode/css/crop_widget.css': 'geonode/less/crop_widget.less'
           }
         ]
       },
       production: {
         options: {
-          paths: ['.components/bootstrap/less'],
+          paths: [
+            'geonode/less',
+            'node_modules/bootstrap/less'
+          ],
           yuicompress: true
         },
         files: [
           {
-            // includes bootstrap.css
-            'geonode/css/base.css': 'geonode/less/base.less'
+            'geonode/css/base.css': 'geonode/less/base.less',
+            'geonode/css/crop_widget.css': 'geonode/less/crop_widget.less'
           }
         ]
       }
@@ -46,167 +77,166 @@ module.exports = function(grunt) {
 
     concat: {
       bootstrap: {
-        src: [
-          '.components/bootstrap/js/bootstrap-affix.js',
-          '.components/bootstrap/js/bootstrap-dropdown.js',
-          '.components/bootstrap/js/bootstrap-tooltip.js',
-          '.components/bootstrap/js/bootstrap-alert.js',
-          '.components/bootstrap/js/bootstrap-modal.js',
-          '.components/bootstrap/js/bootstrap-transition.js',
-          '.components/bootstrap/js/bootstrap-button.js',
-          '.components/bootstrap/js/bootstrap-popover.js',
-          '.components/bootstrap/js/bootstrap-typeahead.js',
-          '.components/bootstrap/js/bootstrap-carousel.js',
-          '.components/bootstrap/js/bootstrap-scrollspy.js',
-          '.components/bootstrap/js/bootstrap-collapse.js',
-          '.components/bootstrap/js/bootstrap-select.js',
-          '.components/bootstrap/js/bootstrap-multiselect.js',
-          '.components/bootstrap/js/bootstrap-tab.js'
-        ],
-        dest: 'lib/js/bootstrap.js'
+          files: [{
+            expand: true,
+            flatten: true,
+            cwd: 'node_modules',
+            dest: 'lib/js',
+            src: fileHandling.concatBootstrap
+        }]
       }
     },
 
     copy: {
-      // TODO: add production version without copying non-min libs
-      development: {
+      default: {
         files: [{
           expand: true,
           flatten: true,
-          cwd: '.components',
+          nonull: true,
+          cwd: 'node_modules',
           dest: 'lib/css',
-          src: [
-            'datatables/media/css/jquery.dataTables.css',
-            'select2/select2.min.css',
-            'multi-select/css/multi-select.css',
-            'jquery-ui/themes/smoothness/jquery-ui.css',
-            'jquery-tree-multiselect/dist/jquery.tree-multiselect.min.css',
-            'bootstrap/dist/css/bootstrap.min.css',
-            'leaflet-fullscreen/dist/leaflet.fullscreen.css',
-            'leaflet-fullscreen/dist/fullscreen@2x.png',
-            'leaflet-fullscreen/dist/fullscreen.png',
-            'eonasdan-bootstrap-datetimepicker/build/css/bootstrap-datetimepicker.min.css',
-            'bootstrap-treeview/dist/bootstrap-treeview.min.css',
-            'bootstrap-tokenfield/dist/css/bootstrap-tokenfield.min.css',
-            'bootstrap-tokenfield/dist/css/tokenfield-typeahead.min.css',
-            'bootstrap-select/dist/css/bootstrap-select.min.css',
-            'bootstrap-wysiwyghtml5/dist/bootstrap-wysihtml5-0.0.2.css',
-            'fastselect/dist/fastselect.min.css'
-          ]
+          src: [fileHandling["assets.min.css"], fileHandling["leaflet.plugins.min.css"], fileHandling["openlayers.plugins.min.css"]]
         }, {
           expand: true,
           flatten: true,
-          cwd: '.components',
+          nonull: true,
+          cwd: 'node_modules',
           dest: 'lib/img',
-          src: [
-            'bootstrap/img/*.png',
-            'select2/*.png', 'select2/spinner.gif',
-            'raty/lib/img/*.png',
-            'multi-select/img/switch.png',
-            'datatables/media/images/*.png',
-            'jquery-ui/themes/smoothness/images/animated-overlay.gif',
-            'zeroclipboard/dist/ZeroClipboard.swf'
-          ]
+          src: fileHandling.images
+        },
+        {
+          expand: true,
+          flatten: true,
+          nonull: true,
+          cwd: 'node_modules',
+          dest: 'lib/fonts',
+          src: fileHandling.lib_fonts
+        },{
+          expand: true,
+          flatten: true,
+          nonull: true,
+          cwd: 'node_modules',
+          dest: 'lib/css/fonts',
+          src: fileHandling.lib_css_fonts
+        },{
+          expand: true,
+          flatten: true,
+          nonull: true,
+          cwd: 'node_modules',
+          dest: 'lib/css/assets',
+          src: fileHandling.lib_css_assets
         }, {
           expand: true,
           flatten: true,
-          cwd: '.components',
+          nonull: true,
+          cwd: 'node_modules',
+          dest: 'lib/css',
+          src: fileHandling.lib_css_png
+        }, {
+          expand: true,
+          flatten: true,
+          nonull: true,
+          cwd: 'node_modules',
           dest: 'lib/js',
-          src: [
-            'jquery/dist/jquery.min.js',
-            'datatables/media/js/jquery.dataTables.js',
-            'jquery-timeago/jquery.timeago.js',
-            'tinysort/src/jquery.tinysort.js',
-            'raty/lib/jquery.raty.min.js',
-            'jquery-waypoints/waypoints.min.js',
-            'jquery-ui/ui/minified/jquery-ui.custom.min.js',
-            'jquery-ajaxprogress/jquery.ajaxprogress.js',
-            'jquery.ajaxQueue/dist/jquery.ajaxQueue.min.js',
-            'multi-select/js/jquery.multi-select.js',
-            'jquery-tree-multiselect/dist/jquery.tree-multiselect.min.js',
-            'json2/json2.js',
-            'select2/select2.js',
-            'requirejs/require.js',
-            'requirejs-text/text.js',
-            'underscore/underscore-min.js',
-            'qunit/qunit/qunit.js',
-            'angular/angular.min.js',
-            'angular-leaflet-directive/dist/angular-leaflet-directive.min.js',
-            'bootstrap/dist/js/bootstrap.min.js',
-            'zeroclipboard/dist/ZeroClipboard.min.js',
-            'leaflet-fullscreen/dist/Leaflet.fullscreen.min.js',
-            'moment/min/moment-with-locales.min.js',
-            'eonasdan-bootstrap-datetimepicker/build/js/bootstrap-datetimepicker.min.js',
-            'bootstrap-treeview/dist/bootstrap-treeview.min.js',
-            'bootstrap-tokenfield/dist/bootstrap-tokenfield.min.js',
-            'bootstrap-select/dist/js/bootstrap-select.min.js',
-            'bootstrap-wysiwyghtml5/dist/bootstrap-wysihtml5-0.0.2.min.js',
-            'fastselect/dist/fastselect.standalone.min.js'
-          ]
+          src: [fileHandling["assets.min.js"], fileHandling.other_dependencies, fileHandling["leaflet-plugins.min.js"], fileHandling["openlayers-plugins.min.js"]]
         }]
       }
     },
 
-    /*!
-     * change image paths in CSS to match url('../lib/img/image.png')
-     * regex should cover following url patterns:
-     * /url\("?images\//g          url("images/animated-overlay.gif")
-     *                             url(images/ui-bg_flat_75_ffffff_40x100.png)
-     * /url\('(?!(images|\.))/g    url('select2.png')
-     *                             url('spinner.gif')
-     * /url\((?!('|"))/g           url(select2x2.png)
-     * must not change             url('../img/switch.png')
-     * /url\('\.\.\/images\//g     url('../images/back_enabled.png')
-     * must not change             alpha(opacity=25)
-     *
-     * TODO: write testcase
-     * var urls = ['url("images/animated-overlay.gif")', 'url(images/ui-bg_flat_75_ffffff_40x100.png)', "url('select2.png')", "url('spinner.gif')", "url(select2x2.png)", "url('../img/switch.png')", "url('../images/back_enabled.png')", "alpha(opacity=25)"],
-     * urlsClean = [];
-     * urls.forEach(function(elem) {
-     *   var urlClean = elem.replace(/url\((("?images\/)|('(?!(images|\.)))|(?!('|"))|('\.\.\/images\/))/g, 'url(\'../img/').replace(/(png|gif|jpg)?(\)|'\)|"\))/g, '$1\')');
-     *   urlsClean.push(urlClean);
-     * });
-     * console.log(urlsClean);
-     */
-
     replace: {
-      development: {
+      default: {
         src: ['lib/css/*.css'],
         overwrite: true,
-        replacements: [{
-          from: /url\((("?images\/)|('(?!(images|\.)))|(?!('|"))|('\.\.\/images\/))/g,
-          to: 'url(\'../img/'
-        }, {
-          from: /(png|gif|jpg)+(\)|'\)|"\))/g,
-          to: '$1\')'
-        }]
+        /*
+         * We separate each pattern so it will be easy for us to read
+         * and recognize
+         */
+        replacements: [
+          /*
+           * Pattern:
+           * url('img/image _.png') or url("img/image _.png")
+           */
+          {
+            from: /url\([\"\']?(img\/)([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$2")'
+          },
+          /*
+           * Pattern:
+           * url('images/image _.png') or url("images/image _.png")
+           */
+          {
+            from: /url\([\"\']?(images\/)([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$2")'
+          },
+          /*
+           * Pattern:
+           * url('image/image _.png') or url("image/image _.png")
+           */
+          {
+            from: /url\([\"\']?(image\/)([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$2")'
+          },
+          /*
+           * Pattern:
+           * url('./image _.png') or url("./image _.png")
+           */
+          /*{
+            from: /url\([\"\']?(\.\/)([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$2")'
+          },*/
+          /*
+           * Pattern:
+           * url('image _.png') or url("image _.png")
+           */
+          /*{
+            from: /url\([\"\']?([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$1")'
+          },*/
+          /*
+           * Pattern:
+           * url('../images/image _.png') or url("../images/image _.png")
+           */
+          {
+            from: /url\([\"\']?(\.\.\/images\/)([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$1")'
+          },
+          /*
+           * Pattern:
+           * url('../image/image _.png') or url("../image/image _.png")
+           */
+          {
+            from: /url\([\"\']?(\.\.\/image\/)([\w-\.\s@]+)[\"\']?\)/g,
+            to: 'url("../img/$1")'
+          }
+        ]
       }
     },
 
     cssmin: {
-      production: {
+      default: {
         options: {
           // the banner is inserted at the top of the output
-          banner: '/*! <%= pkg.name %> <%= grunt.template.today("dd-mm-yyyy") %> */\n'
+          banner: '/*! <%= pkg.name %> <%= grunt.template.today("dd-mm-yyyy") %> */\n',
+          cwd: 'l'
         },
         files: {
-          'lib/css/assets.min.css': [
-            'lib/css/bootstrap.min.css',
-            'lib/css/bootstrap-datetimepicker.min.css',
-            'lib/css/bootstrap-treeview.min.css',
-            'lib/css/bootstrap-tokenfield.min.css',
-            'lib/css/bootstrap-select.min.css',
-            'lib/css/bootstrap-wysihtml5-0.0.2.css',
-            'lib/css/fastselect.min.css',
-            'lib/css/jquery-ui.css',
-            'lib/css/jquery.dataTables.css',
-            'lib/css/jquery.tree-multiselect.min.css',
-            'lib/css/jquery.treefilter.css',
-            'lib/css/leaflet.fullscreen.css',
-            'lib/css/L.Control.Pan.css',
-            'lib/css/multi-select.css'
-          ]
+          'lib/css/assets.min.css': assetsMinifiedCss,
+          'lib/css/leaflet-plugins.min.css': leafletMinifiedCss,
+          'lib/css/openlayers-plugins.min.css': openlayersMinifiedCss
         }
+      }
+    },
+
+    babel: {
+      options: {
+          sourceMap: true,
+          presets: ['@babel/preset-env']
+      },
+      dist: {
+          files: {
+              'geonode/js/crop_widget/crop_widget_es5.js': 'geonode/js/crop_widget/crop_widget.js',
+              'geonode/js/messages/message_recipients_autocomplete_es5.js': 'geonode/js/messages/message_recipients_autocomplete.js'
+          }
       }
     },
 
@@ -215,38 +245,28 @@ module.exports = function(grunt) {
         // the banner is inserted at the top of the output
         banner: '/*! <%= pkg.name %> <%= grunt.template.today("dd-mm-yyyy") %> */\n'
       },
-      production: {
+      development: {
+        options: {
+          beautify: true,
+          compress: false,
+          mangle: false
+        },
         files: {
-          'lib/js/assets.min.js': [
-            'lib/js/jquery.min.js',
-            'lib/js/jquery-ui.custom.min.js',
-            'lib/js/jquery.dataTables.js',
-            'lib/js/jquery.raty.min.js',
-            'lib/js/jquery.timeago.js',
-            'lib/js/json2.js',
-            'lib/js/waypoints.min.js',
-            'lib/js/select2.js',
-            'lib/js/moment-with-locales.min.js',
-            'lib/js/fastselect.standalone.min.js',
-            'lib/js/bootstrap.min.js',
-            'lib/js/bootstrap-datetimepicker.min.js',
-            'lib/js/bootstrap-tokenfield.min.js',
-            'lib/js/bootstrap-treeview.min.js',
-            'lib/js/bootstrap-select.min.js',
-            'lib/js/bootstrap-wysihtml5-0.0.2.min.js',
-            'lib/js/angular.min.js',
-            'lib/js/jquery.ajaxprogress.js',
-            'lib/js/jquery.ajaxQueue.min.js',
-            'lib/js/jquery.multi-select.js',
-            'lib/js/jquery.tree-multiselect.min.js',
-            'lib/js/jquery.treefilter-min.js',
-            'lib/js/angular-leaflet-directive.min.js',
-            'lib/js/ZeroClipboard.min.js'
-          ],
-          'lib/js/jquery.js': ['lib/js/jquery.min.js'],
-          'lib/js/require.js': ['lib/js/require.js'],
-          'lib/js/text.js': ['lib/js/text.js'],
-          'lib/js/underscore.js': ['lib/js/underscore-min.js']
+          'lib/js/assets.min.js': assetsMinifiedJs,
+          'lib/js/leaflet-plugins.min.js': leafletPluginsMinifiedJs,
+          'lib/js/openlayers-plugins.min.js': openlayersPluginsMinifiedJs
+        }
+      },
+      production: {
+        options: {
+          beautify: false,
+          compress: true,
+          mangle: false
+        },
+        files: {
+          'lib/js/assets.min.js': assetsMinifiedJs,
+          'lib/js/leaflet-plugins.min.js': leafletPluginsMinifiedJs,
+          'lib/js/openlayers-plugins.min.js': openlayersPluginsMinifiedJs
         }
       }
     },
@@ -261,22 +281,16 @@ module.exports = function(grunt) {
   });
 
   // Load libs
-  grunt.loadNpmTasks('grunt-contrib-jshint');
-  grunt.loadNpmTasks('grunt-contrib-less');
-  grunt.loadNpmTasks('grunt-contrib-copy');
-  grunt.loadNpmTasks('grunt-contrib-concat');
-  grunt.loadNpmTasks('grunt-contrib-uglify');
-  grunt.loadNpmTasks('grunt-contrib-cssmin');
-  grunt.loadNpmTasks('grunt-contrib-watch');
-  grunt.loadNpmTasks('grunt-text-replace');
+  require('load-grunt-tasks')(grunt);
 
   // test
   grunt.registerTask('test', ['jshint']);
 
   // build development
-  grunt.registerTask('default', ['jshint', 'less:development', 'concat:bootstrap', 'copy', 'replace']);
-
+  grunt.registerTask('development', ['jshint', 'clean:lib', 'less:development', 'concat:bootstrap', 'copy', 'replace', 'cssmin', 'uglify:development', 'babel']);
+  grunt.registerTask('build-less-dev', ['less:development']);
   // build production
-  grunt.registerTask('production', ['jshint', 'less:production', 'concat:bootstrap', 'copy', 'cssmin', 'uglify' ]);
+  grunt.registerTask('production', ['jshint', 'clean:lib', 'less:production', 'concat:bootstrap', 'copy', 'replace', 'cssmin', 'uglify:production', 'babel']);
+  grunt.registerTask('build-less-prod', ['less:production']);
 
 };
