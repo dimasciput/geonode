@@ -17,7 +17,7 @@ jobs:
     steps:
     - uses: actions/checkout@master	
       with: 	
-        repository: dimasciput/geonode
+        repository: kartoza/geonode
         ref: igrac	
         fetch-depth: 1	
         path: geonode/	
