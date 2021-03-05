@@ -1537,6 +1537,14 @@ def layer_thumbnail(request, layername):
                 content_type='text/plain'
             )
         filename = "layer-%s-thumb.png" % layer_obj.uuid
+        if settings.ADD_TIMESTAMP_IN_THUMBNAIL:
+            from geonode.base.thumb_utils import thumb_exists
+            import time
+            if thumb_exists(filename):
+                filename = "layer-{uuid}-thumb.{timestamp}.png".format(
+                    uuid=layer_obj.uuid,
+                    timestamp=int(time.time())
+                )
         layer_obj.save_thumbnail(filename, image)
 
         return HttpResponse('Thumbnail saved')
